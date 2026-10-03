@@ -1,3 +1,4 @@
+import os
 from langgraph.graph import StateGraph, START, END
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from dotenv import load_dotenv
@@ -15,26 +16,18 @@ from langchain_core.prompts import (
     MessagesPlaceholder
 )
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 
 
-# ============================================================
-# ENVIRONMENT
-# ============================================================
+
 
 load_dotenv()
 
 
-# ============================================================
-# MEMORY
-# ============================================================
 
-checkpoint = MemorySaver()
+DB_URI=os.getenv("POSTGRES_URI")
 
 
-# ============================================================
-# STATE
-# ============================================================
 
 class STATE(TypedDict):
     conversation: Annotated[list[BaseMessage], add_messages]
@@ -72,7 +65,6 @@ class IsWebSearchRequired(BaseModel):
 # ============================================================
 
 router_prompt = ChatPromptTemplate.from_messages([
-
     (
         "system",
         """
@@ -316,20 +308,13 @@ CURRENT WEB INFORMATION:
 ])
 
 
-# ============================================================
-# ANSWERING LLM
-# ============================================================
+
 
 brain = ChatOpenRouter(
     model="qwen/qwen3-8b",
     temperature=0,
     max_tokens=300
 )
-
-
-# ============================================================
-# ROUTER LLM
-# ============================================================
 
 chat_model = ChatOpenRouter(
     model="anthropic/claude-sonnet-4-5",
@@ -342,9 +327,7 @@ llm_with_websearch = chat_model.with_structured_output(
 )
 
 
-# ============================================================
-# ROUTER NODE
-# ============================================================
+
 
 def router_func(state: STATE) -> STATE:
 
@@ -361,9 +344,6 @@ def router_func(state: STATE) -> STATE:
     }
 
 
-# ============================================================
-# WEB SEARCH NODE
-# ============================================================
 
 def websearch_func(state: STATE) -> STATE:
 
@@ -385,9 +365,7 @@ def websearch_func(state: STATE) -> STATE:
     }
 
 
-# ============================================================
-# CHAT NODE
-# ============================================================
+
 
 def chat_func(state: STATE) -> STATE:
 
@@ -422,9 +400,7 @@ def chat_func(state: STATE) -> STATE:
     }
 
 
-# ============================================================
-# CONDITIONAL ROUTING
-# ============================================================
+
 
 def condition_func(state: STATE):
 
@@ -433,10 +409,6 @@ def condition_func(state: STATE):
 
     return "chat_Node"
 
-
-# ============================================================
-# BUILD GRAPH
-# ============================================================
 
 graph = StateGraph(STATE)
 
@@ -455,11 +427,6 @@ graph.add_node(
     "chat_Node",
     chat_func
 )
-
-
-# ============================================================
-# EDGES
-# ============================================================
 
 graph.add_edge(
     START,
@@ -489,73 +456,45 @@ graph.add_edge(
 )
 
 
-# ============================================================
-# COMPILE
-# ============================================================
 
-app = graph.compile(
-    checkpointer=checkpoint
-)
+thread_id=input("Enter the thread ID corresponding to the conversation you want: ")
 
 
-# ============================================================
-# DISPLAY GRAPH
-# ============================================================
+with PostgresSaver.from_conn_string(DB_URI) as checkpoint:
 
-print(
-    app.get_graph().draw_ascii()
-)
+    checkpoint.setup() 
+    # creates the tables required by LangGraph in PostgreSQL.
 
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-config = {
-    "configurable": {
-        "thread_id": "Tushar"
+    app = graph.compile(checkpointer=checkpoint)
+    config = {
+        "configurable":{
+            "thread_id": thread_id,
+        }
     }
-}
-
-
-# ============================================================
-# CHAT LOOP
-# ============================================================
-
-while True:
-
-    user = input("User: ")
-
-    if user.lower().strip() == "exit":
-        break
-
-    response = app.invoke(
-        {
-            "input_query": user,
-
-            # Initial values
-            "conversation": [],
-
-            "results": [],
-
-            "websearch_": "NO",
-
-            "modified_query": ""
-        },
-        config=config
-    )
 
     print(
-        "Aria:",
-        response["conversation"][-1].content
+        app.get_graph().draw_ascii()
     )
 
+    while True:
+        user_input = input("Enter your message (or 'exit' to quit): ")
 
-# ============================================================
-# LAST STATE
-# ============================================================
+        if user_input.lower() == "exit":
+            break
 
-print(
-    "Last State:",
-    app.get_state(config)
-)
+        state = {
+            "input_query": user_input,
+            "conversation": [],
+            "websearch_": "",
+            "results": [],
+            "modified_query": ""
+        }
+
+        final_state = app.invoke(state, config=config)
+
+        print("Aria:", final_state["conversation"][-1].content)
+
+
+
+
+
