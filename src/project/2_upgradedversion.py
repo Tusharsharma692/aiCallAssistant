@@ -22,9 +22,6 @@ from langgraph.checkpoint.postgres import PostgresSaver
 
 
 load_dotenv()
-
-
-
 DB_URI=os.getenv("POSTGRES_URI")
 
 
@@ -412,12 +409,10 @@ def condition_func(state: STATE):
 
 graph = StateGraph(STATE)
 
-
 graph.add_node(
     "router_Node",
     router_func
 )
-
 graph.add_node(
     "websearch_Node",
     websearch_func
